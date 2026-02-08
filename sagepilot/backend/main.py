@@ -1,0 +1,158 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from temporalio.client import Client
+import uuid
+import asyncio
+
+app = FastAPI(title="SagePilot Workflow Engine")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Store to track workflows (in-memory for now)
+executions = {}
+
+@app.get("/")
+async def root():
+    return {"message": "SagePilot Workflow Engine", "status": "running"}
+
+@app.post("/api/workflows/execute")
+async def execute_workflow(workflow_def: dict):
+    """Execute a workflow via Temporal"""
+    try:
+        # Connect to Temporal
+        client = await Client.connect("localhost:7233")
+        
+        run_id = f"workflow-{uuid.uuid4()}"
+        
+        # Start workflow
+        handle = await client.start_workflow(
+            "WorkflowExecution",
+            workflow_def,
+            id=run_id,
+            task_queue="workflow-execution-queue"
+        )
+        
+        # Store execution info
+        executions[run_id] = {
+            "run_id": run_id,
+            "status": "running",
+            "workflow_def": workflow_def
+        }
+        
+        return {
+            "run_id": run_id,
+            "status": "started",
+            "workflow_id": run_id
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "message": "Failed to start workflow. Is Temporal server running?"
+        }
+
+@app.get("/api/executions/{run_id}")
+async def get_execution(run_id: str):
+    """Get execution status and result"""
+    try:
+        client = await Client.connect("localhost:7233")
+        handle = client.get_workflow_handle(run_id)
+        
+        # Try to get result (non-blocking check)
+        try:
+            result = await asyncio.wait_for(handle.result(), timeout=0.1)
+            executions[run_id]["status"] = "completed"
+            executions[run_id]["result"] = result
+            return {
+                "run_id": run_id,
+                "status": "completed",
+                "result": result
+            }
+        except asyncio.TimeoutError:
+            return {
+                "run_id": run_id,
+                "status": "running"
+            }
+    except Exception as e:
+        if run_id in executions:
+            return executions[run_id]
+        return {
+            "error": str(e),
+            "run_id": run_id,
+            "status": "unknown"
+        }
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+
+# TEst 
+@app.post("/api/workflows/visualize")
+async def visualize_workflow(workflow_def: dict):
+    """Generate a visual representation of the workflow DAG"""
+    nodes = workflow_def.get("nodes", [])
+    edges = workflow_def.get("edges", [])
+    
+    # Create a simple ASCII representation
+    ascii_graph = ["Workflow DAG:", "=" * 50, ""]
+    
+    # Build adjacency map
+    node_map = {node["id"]: node for node in nodes}
+    children_map = {}
+    for edge in edges:
+        if edge["source"] not in children_map:
+            children_map[edge["source"]] = []
+        children_map[edge["source"]].append(edge["target"])
+    
+    # Find root (node with no incoming edges)
+    all_targets = {edge["target"] for edge in edges}
+    roots = [node["id"] for node in nodes if node["id"] not in all_targets]
+    
+    def print_node(node_id, indent=0):
+        node = node_map[node_id]
+        prefix = "  " * indent + ("└─ " if indent > 0 else "")
+        ascii_graph.append(f"{prefix}[{node['type']}] {node_id}")
+        
+        # Print children
+        if node_id in children_map:
+            for child_id in children_map[node_id]:
+                print_node(child_id, indent + 1)
+    
+    # Build tree
+    for root in roots:
+        print_node(root)
+    
+    return {
+        "ascii": "\n".join(ascii_graph),
+        "nodes": nodes,
+        "edges": edges,
+        "execution_order": get_execution_order(nodes, edges)
+    }
+
+def get_execution_order(nodes, edges):
+    """Get topological sort of nodes"""
+    node_map = {node["id"]: node for node in nodes}
+    all_targets = {edge["target"] for edge in edges}
+    start_nodes = [node["id"] for node in nodes if node["id"] not in all_targets]
+    
+    if not start_nodes:
+        return list(node_map.keys())
+    
+    order = []
+    current = start_nodes[0]
+    order.append(current)
+    
+    while True:
+        next_edges = [e for e in edges if e["source"] == current]
+        if not next_edges:
+            break
+        current = next_edges[0]["target"]
+        order.append(current)
+    
+    return order
