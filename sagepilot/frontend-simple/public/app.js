@@ -706,6 +706,35 @@ async function showLoadModal() {
   await listSavedWorkflows();
 }
 
+// Validate workflow for cycles
+async function validateWorkflow() {
+  const workflowDef = getWorkflowDefinition();
+
+  if (workflowDef.nodes.length === 0) {
+    alert('⚠️ Add some nodes first!');
+    return;
+  }
+
+  try {
+    const response = await fetch('http://localhost:8000/api/workflows/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(workflowDef)
+    });
+
+    const result = await response.json();
+
+    if (result.valid) {
+      const order = result.execution_order.join(' → ');
+      alert(`✅ Valid DAG!\n\nExecution Order:\n${order}`);
+    } else {
+      alert(`❌ Invalid Workflow!\n\n${result.error}\n\nPlease remove cycles to create a valid DAG.`);
+    }
+  } catch (error) {
+    alert('❌ Error validating workflow: ' + error.message);
+  }
+}
+
 
 
 // Clear workflow
@@ -736,6 +765,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Control buttons
   document.getElementById('saveAsBtn').addEventListener('click', showSaveModal);
   document.getElementById('loadBtn').addEventListener('click', showLoadModal);
+  document.getElementById('validateBtn').addEventListener('click', validateWorkflow);
   document.getElementById('runBtn').addEventListener('click', runWorkflow);
   document.getElementById('clearBtn').addEventListener('click', clearWorkflow);
   document.getElementById('closeConfigBtn').addEventListener('click', hideConfigPanel);

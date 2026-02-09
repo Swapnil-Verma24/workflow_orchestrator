@@ -9,6 +9,7 @@ import json
 # Import database components
 from database import init_db, get_db
 from models import SavedWorkflow
+from utils import check_cycle_and_get_order, validate_workflow_structure
 
 app = FastAPI(title="SagePilot Workflow Engine")
 
@@ -77,6 +78,11 @@ async def webhook_trigger(workflow_id: str, request: Request):
 @app.post("/api/workflows")
 async def save_workflow(workflow_def: dict):
     """Save a new workflow (Required for Webhook Trigger)"""
+    # Validate workflow structure and check for cycles
+    is_valid, error_msg = validate_workflow_structure(workflow_def)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
     workflow_id = str(uuid.uuid4())
     stored_workflows[workflow_id] = workflow_def
     return {"id": workflow_id, "message": "Workflow deployed successfully"}
@@ -88,6 +94,14 @@ async def root():
 @app.post("/api/workflows/execute")
 async def execute_workflow(workflow_def: dict):
     """Execute a workflow via Temporal"""
+    # Validate workflow structure and check for cycles
+    is_valid, error_msg = validate_workflow_structure(workflow_def)
+    if not is_valid:
+        return {
+            "error": error_msg,
+            "message": "Workflow validation failed"
+        }
+    
     try:
         # Connect to Temporal
         client = await Client.connect("localhost:7233")
@@ -154,6 +168,28 @@ async def get_execution(run_id: str):
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.post("/api/workflows/validate")
+async def validate_workflow(workflow_def: dict):
+    """Validate workflow and return execution order"""
+    nodes = workflow_def.get("nodes", [])
+    edges = workflow_def.get("edges", [])
+    
+    has_cycle, execution_order, error_msg = check_cycle_and_get_order(nodes, edges)
+    
+    if has_cycle:
+        return {
+            "valid": False,
+            "error": error_msg,
+            "has_cycle": True
+        }
+    
+    return {
+        "valid": True,
+        "has_cycle": False,
+        "execution_order": execution_order,
+        "message": "Workflow is a valid DAG"
+    }
 
 
 # TEst 
@@ -234,6 +270,11 @@ async def save_workflow_to_db(workflow: dict, db: Session = Depends(get_db)):
     
     if not workflow_data:
         raise HTTPException(status_code=400, detail="Workflow data is required")
+    
+    # Validate workflow structure and check for cycles
+    is_valid, error_msg = validate_workflow_structure(workflow_data)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
     
     # Check if workflow with this name already exists
     existing = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_name).first()
