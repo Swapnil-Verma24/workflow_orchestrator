@@ -1,10 +1,22 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from temporalio.client import Client
+from sqlalchemy.orm import Session
 import uuid
 import asyncio
+import json
+
+# Import database components
+from database import init_db, get_db
+from models import SavedWorkflow
 
 app = FastAPI(title="SagePilot Workflow Engine")
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    print("✅ Database initialized")
 
 app.add_middleware(
     CORSMiddleware,
@@ -208,3 +220,75 @@ def get_execution_order(nodes, edges):
         order.append(current)
     
     return order
+
+# ===== Workflow Database Persistence Endpoints =====
+
+@app.post("/api/workflows/save")
+async def save_workflow_to_db(workflow: dict, db: Session = Depends(get_db)):
+    """Save a workflow to the database with a name"""
+    workflow_name = workflow.get("name")
+    workflow_data = workflow.get("workflow_data")
+    
+    if not workflow_name:
+        raise HTTPException(status_code=400, detail="Workflow name is required")
+    
+    if not workflow_data:
+        raise HTTPException(status_code=400, detail="Workflow data is required")
+    
+    # Check if workflow with this name already exists
+    existing = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_name).first()
+    
+    if existing:
+        # Update existing workflow
+        existing.workflow_data = json.dumps(workflow_data)
+        db.commit()
+        db.refresh(existing)
+        return {"message": "Workflow updated successfully", "workflow_name": workflow_name}
+    else:
+        # Create new workflow
+        new_workflow = SavedWorkflow(
+            name=workflow_name,
+            workflow_data=json.dumps(workflow_data)
+        )
+        db.add(new_workflow)
+        db.commit()
+        db.refresh(new_workflow)
+        return {"message": "Workflow saved successfully", "workflow_name": workflow_name}
+
+@app.get("/api/workflows/saved")
+async def list_saved_workflows(db: Session = Depends(get_db)):
+    """List all saved workflows (names and metadata only)"""
+    workflows = db.query(SavedWorkflow).all()
+    return {
+        "workflows": [
+            {
+                "name": wf.name,
+                "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                "updated_at": wf.updated_at.isoformat() if wf.updated_at else None
+            }
+            for wf in workflows
+        ]
+    }
+
+@app.get("/api/workflows/saved/{workflow_name}")
+async def load_workflow_from_db(workflow_name: str, db: Session = Depends(get_db)):
+    """Load a specific workflow by name"""
+    workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_name).first()
+    
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    return workflow.to_dict()
+
+@app.delete("/api/workflows/saved/{workflow_name}")
+async def delete_workflow_from_db(workflow_name: str, db: Session = Depends(get_db)):
+    """Delete a workflow by name"""
+    workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_name).first()
+    
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    db.delete(workflow)
+    db.commit()
+    
+    return {"message": f"Workflow '{workflow_name}' deleted successfully"}

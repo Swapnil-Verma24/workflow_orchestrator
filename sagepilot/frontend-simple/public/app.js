@@ -40,6 +40,66 @@ const nodeLabels = {
   end: '🏁 End'
 };
 
+// SessionStorage functions
+function saveToSession() {
+  const workflowState = {
+    nodes: nodes.get(),
+    edges: edges.get(),
+    nodeConfigs: nodeConfigs,
+    nodeCounter: nodeCounter,
+    currentWorkflowId: currentWorkflowId,
+    positions: {}
+  };
+
+  // Save node positions
+  if (network) {
+    nodes.get().forEach(node => {
+      workflowState.positions[node.id] = network.getPosition(node.id);
+    });
+  }
+
+  sessionStorage.setItem('workflow_state', JSON.stringify(workflowState));
+  console.log('💾 Workflow saved to session');
+}
+
+function loadFromSession() {
+  const savedState = sessionStorage.getItem('workflow_state');
+  if (!savedState) {
+    console.log('📭 No saved workflow in session');
+    return;
+  }
+
+  try {
+    const workflowState = JSON.parse(savedState);
+
+    // Restore nodes and edges
+    nodes.clear();
+    edges.clear();
+    nodes.add(workflowState.nodes);
+    edges.add(workflowState.edges);
+
+    // Restore configurations
+    nodeConfigs = workflowState.nodeConfigs;
+    nodeCounter = workflowState.nodeCounter || 0;
+    currentWorkflowId = workflowState.currentWorkflowId || null;
+
+    // Restore positions after a short delay to ensure network is ready
+    if (workflowState.positions && network) {
+      setTimeout(() => {
+        Object.keys(workflowState.positions).forEach(nodeId => {
+          const pos = workflowState.positions[nodeId];
+          network.moveNode(nodeId, pos.x, pos.y);
+        });
+        network.fit();
+      }, 100);
+    }
+
+    console.log('📂 Workflow loaded from session');
+  } catch (error) {
+    console.error('❌ Error loading from session:', error);
+  }
+}
+
 // Initialize network
 function initNetwork() {
   const container = document.getElementById('network');
@@ -94,6 +154,9 @@ function initNetwork() {
 
   network = new vis.Network(container, data, options);
 
+  // Load from session on init
+  loadFromSession();
+
   // Event listeners
   network.on('click', function (params) {
     if (params.nodes.length > 0) {
@@ -102,6 +165,13 @@ function initNetwork() {
     } else {
       hideConfigPanel();
     }
+  });
+
+  // Save to session when edges are added or removed
+  network.on('afterDrawing', function () {
+    // Only save if there are actual changes (debounced)
+    clearTimeout(window.sessionSaveTimeout);
+    window.sessionSaveTimeout = setTimeout(saveToSession, 300);
   });
 
   // Remove the doubleClick listener - we don't need it anymore
@@ -132,6 +202,9 @@ function addNode(type) {
   // Position new node in center
   const position = network.getViewPosition();
   network.moveNode(nodeId, position.x, position.y);
+
+  // Auto-save to session
+  saveToSession();
 }
 
 // Show configuration panel
@@ -355,6 +428,7 @@ function saveConfig() {
   }
 
   alert('✅ Configuration saved!');
+  saveToSession();
 }
 
 // Helper to get workflow definition
@@ -401,6 +475,7 @@ async function saveWorkflow() {
     const result = await response.json();
     if (result.id) {
       currentWorkflowId = result.id;
+      saveToSession();
       alert(`✅ Workflow deployed! ID: ${currentWorkflowId} `);
     }
   } catch (error) {
@@ -417,6 +492,7 @@ function deleteNode() {
     edges.remove(edges.get().filter(e => e.from === selectedNodeId || e.to === selectedNodeId));
     delete nodeConfigs[selectedNodeId];
     hideConfigPanel();
+    saveToSession();
   }
 }
 
@@ -471,6 +547,165 @@ async function runWorkflow() {
 
 
 
+// ===== Database Persistence Functions =====
+
+// Save workflow to database
+async function saveWorkflowToDatabase() {
+  const workflowName = prompt('Enter workflow name:');
+  if (!workflowName || workflowName.trim() === '') return;
+
+  const workflowData = {
+    nodes: nodes.get(),
+    edges: edges.get(),
+    nodeConfigs: nodeConfigs,
+    nodeCounter: nodeCounter,
+    currentWorkflowId: currentWorkflowId,
+    positions: {}
+  };
+
+  // Save node positions
+  if (network) {
+    nodes.get().forEach(node => {
+      workflowData.positions[node.id] = network.getPosition(node.id);
+    });
+  }
+
+  try {
+    const response = await fetch('http://localhost:8000/api/workflows/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: workflowName,
+        workflow_data: workflowData
+      })
+    });
+
+    if (!response.ok) throw new Error('Failed to save workflow');
+
+    const result = await response.json();
+    alert(`✅ ${result.message}`);
+  } catch (error) {
+    alert('❌ Error saving workflow: ' + error.message);
+  }
+}
+
+// Load workflow from database
+async function loadWorkflowFromDatabase(workflowName) {
+  try {
+    const response = await fetch(`http://localhost:8000/api/workflows/saved/${encodeURIComponent(workflowName)}`);
+
+    if (!response.ok) throw new Error('Failed to load workflow');
+
+    const result = await response.json();
+    const workflowData = result.workflow_data;
+
+    // Clear current workflow
+    nodes.clear();
+    edges.clear();
+
+    // Load workflow data
+    nodes.add(workflowData.nodes);
+    edges.add(workflowData.edges);
+    nodeConfigs = workflowData.nodeConfigs;
+    nodeCounter = workflowData.nodeCounter || 0;
+    currentWorkflowId = workflowData.currentWorkflowId || null;
+
+    // Restore positions
+    if (workflowData.positions && network) {
+      setTimeout(() => {
+        Object.keys(workflowData.positions).forEach(nodeId => {
+          const pos = workflowData.positions[nodeId];
+          network.moveNode(nodeId, pos.x, pos.y);
+        });
+        network.fit();
+      }, 100);
+    }
+
+    // Save to session as well
+    saveToSession();
+
+    // Close modal
+    document.getElementById('loadModal').classList.add('hidden');
+
+    alert(`✅ Workflow "${workflowName}" loaded successfully`);
+  } catch (error) {
+    alert('❌ Error loading workflow: ' + error.message);
+  }
+}
+
+// List all saved workflows
+async function listSavedWorkflows() {
+  try {
+    const response = await fetch('http://localhost:8000/api/workflows/saved');
+
+    if (!response.ok) throw new Error('Failed to fetch workflows');
+
+    const result = await response.json();
+    const workflowList = document.getElementById('workflowList');
+
+    if (result.workflows.length === 0) {
+      workflowList.innerHTML = '<p class="text-gray-500 text-center py-4">No saved workflows found</p>';
+      return;
+    }
+
+    workflowList.innerHTML = result.workflows.map(wf => `
+      <div class="flex justify-between items-center p-3 border-b hover:bg-gray-50">
+        <div class="flex-1">
+          <div class="font-medium text-gray-800">${wf.name}</div>
+          <div class="text-xs text-gray-500">
+            Updated: ${new Date(wf.updated_at).toLocaleString()}
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="loadWorkflowFromDatabase('${wf.name}')" 
+            class="px-3 py-1 bg-cyan-600 text-white rounded hover:bg-cyan-700 text-sm">
+            Load
+          </button>
+          <button onclick="deleteWorkflowFromDatabase('${wf.name}')" 
+            class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm">
+            Delete
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch (error) {
+    alert('❌ Error listing workflows: ' + error.message);
+  }
+}
+
+// Delete workflow from database
+async function deleteWorkflowFromDatabase(workflowName) {
+  if (!confirm(`Delete workflow "${workflowName}"?`)) return;
+
+  try {
+    const response = await fetch(`http://localhost:8000/api/workflows/saved/${encodeURIComponent(workflowName)}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) throw new Error('Failed to delete workflow');
+
+    alert(`✅ Workflow "${workflowName}" deleted successfully`);
+
+    // Refresh the list
+    await listSavedWorkflows();
+  } catch (error) {
+    alert('❌ Error deleting workflow: ' + error.message);
+  }
+}
+
+// Show save modal
+function showSaveModal() {
+  document.getElementById('saveAsModal').classList.remove('hidden');
+  document.getElementById('workflowNameInput').value = '';
+  document.getElementById('workflowNameInput').focus();
+}
+
+// Show load modal
+async function showLoadModal() {
+  document.getElementById('loadModal').classList.remove('hidden');
+  await listSavedWorkflows();
+}
+
 
 
 // Clear workflow
@@ -480,7 +715,10 @@ function clearWorkflow() {
     edges.clear();
     nodeConfigs = {};
     nodeCounter = 0;
+    currentWorkflowId = null;
     hideConfigPanel();
+    sessionStorage.removeItem('workflow_state');
+    console.log('🗑️ Workflow cleared from session');
   }
 }
 
@@ -496,11 +734,67 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Control buttons
+  document.getElementById('saveAsBtn').addEventListener('click', showSaveModal);
+  document.getElementById('loadBtn').addEventListener('click', showLoadModal);
   document.getElementById('runBtn').addEventListener('click', runWorkflow);
   document.getElementById('clearBtn').addEventListener('click', clearWorkflow);
   document.getElementById('closeConfigBtn').addEventListener('click', hideConfigPanel);
   document.getElementById('saveConfigBtn').addEventListener('click', saveConfig);
   document.getElementById('deleteNodeBtn').addEventListener('click', deleteNode);
+
+  // Save As modal listeners
+  document.getElementById('confirmSaveBtn').addEventListener('click', async () => {
+    const workflowName = document.getElementById('workflowNameInput').value.trim();
+    if (!workflowName) {
+      alert('Please enter a workflow name');
+      return;
+    }
+
+    document.getElementById('saveAsModal').classList.add('hidden');
+
+    const workflowData = {
+      nodes: nodes.get(),
+      edges: edges.get(),
+      nodeConfigs: nodeConfigs,
+      nodeCounter: nodeCounter,
+      currentWorkflowId: currentWorkflowId,
+      positions: {}
+    };
+
+    // Save node positions
+    if (network) {
+      nodes.get().forEach(node => {
+        workflowData.positions[node.id] = network.getPosition(node.id);
+      });
+    }
+
+    try {
+      const response = await fetch('http://localhost:8000/api/workflows/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: workflowName,
+          workflow_data: workflowData
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to save workflow');
+
+      const result = await response.json();
+      alert(`✅ ${result.message}`);
+    } catch (error) {
+      alert('❌ Error saving workflow: ' + error.message);
+    }
+  });
+
+  document.getElementById('cancelSaveBtn').addEventListener('click', () => {
+    document.getElementById('saveAsModal').classList.add('hidden');
+  });
+
+  document.getElementById('closeLoadBtn').addEventListener('click', () => {
+    document.getElementById('loadModal').classList.add('hidden');
+  });
+
   document.getElementById('deployBtn')?.addEventListener('click', async () => {
     await saveWorkflow();
     // Re-render config if current node is webhook to show the URL
