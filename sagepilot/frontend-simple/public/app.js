@@ -5,12 +5,14 @@ let nodeConfigs = {}; // Store node configurations
 let nodeCounter = 0;
 let selectedNodeId = null;
 let network = null;
+let currentWorkflowId = null;
 
 // Default configurations for each node type
 const defaultConfigs = {
   manual_trigger: { initial_payload: { message: 'hello', value: 42 } },
   transform_data: { transformation_type: 'uppercase', target_field: 'message', parameters: { factor: 2 } },
   decision_node: { conditions: [{ field: 'value', operator: 'equals', value: 42, true_node: '', false_node: '' }] },
+  webhook_trigger: {},
   end: {}
 };
 
@@ -19,6 +21,7 @@ const nodeColors = {
   manual_trigger: { background: '#86efac', border: '#22c55e' },
   transform_data: { background: '#fde047', border: '#eab308' },
   decision_node: { background: '#fdba74', border: '#f97316' },
+  webhook_trigger: { background: '#d8b4fe', border: '#a855f7' },
   end: { background: '#fca5a5', border: '#ef4444' }
 };
 
@@ -27,10 +30,10 @@ const nodeLabels = {
   manual_trigger: '▶ Manual Trigger',
   transform_data: '🔄 Transform',
   decision_node: '🔀 Decision',
+  webhook_trigger: '⚡ Webhook',
   end: '🏁 End'
 };
 
-// Initialize network
 // Initialize network
 function initNetwork() {
   const container = document.getElementById('network');
@@ -224,7 +227,23 @@ function buildConfigForm(nodeType, config) {
       `;
       break;
 
-
+    case 'webhook_trigger':
+      html = `
+        <div class="text-sm text-gray-600">
+          <p class="mb-2">This node triggers the workflow via an external HTTP POST request.</p>
+          <p class="mb-2"><strong>Payload:</strong> The JSON body of the request will be passed as the payload.</p>
+          ${currentWorkflowId ? `
+            <div class="mt-4 p-2 bg-gray-100 rounded border border-gray-200">
+              <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Webhook URL</label>
+              <div class="flex gap-1">
+                <input readonly type="text" value="http://localhost:8000/api/webhooks/${currentWorkflowId}" class="w-full p-1 text-xs bg-white border rounded font-mono">
+                <button type="button" onclick="navigator.clipboard.writeText('http://localhost:8000/api/webhooks/${currentWorkflowId}')" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-xs">📋</button>
+              </div>
+            </div>
+          ` : '<p class="text-amber-600 text-xs mt-2">⚠ Click 🚀 Deploy to generate the Webhook URL.</p>'}
+        </div>
+      `;
+      break;
 
     default:
       html = '<div class="text-gray-500 text-sm">No configuration needed for this node type.</div>';
@@ -280,6 +299,57 @@ function saveConfig() {
   alert('✅ Configuration saved!');
 }
 
+// Helper to get workflow definition
+function getWorkflowDefinition() {
+  const workflowNodes = nodes.get().map(n => ({
+    id: n.id,
+    type: nodeConfigs[n.id].nodeType,
+    config: { ...nodeConfigs[n.id] },
+    position: network.getPosition(n.id)
+  }));
+
+  const workflowEdges = edges.get().map(e => ({
+    source: e.from,
+    target: e.to
+  }));
+
+  return {
+    id: currentWorkflowId, // Include ID if it exists for updates
+    nodes: workflowNodes,
+    edges: workflowEdges
+  };
+}
+
+// Save/Deploy workflow
+async function saveWorkflow() {
+  const workflowDef = getWorkflowDefinition();
+  if (workflowDef.nodes.length === 0) {
+    alert('Cannot save empty workflow!');
+    return;
+  }
+
+  // Always use POST to create a new deployment ID as per simplified backend
+  const endpoint = 'http://localhost:8000/api/workflows';
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(workflowDef)
+    });
+
+    if (!response.ok) throw new Error('Failed to deploy workflow');
+
+    const result = await response.json();
+    if (result.id) {
+      currentWorkflowId = result.id;
+      alert(`✅ Workflow deployed! ID: ${currentWorkflowId}`);
+    }
+  } catch (error) {
+    alert('❌ Error deploying workflow: ' + error.message);
+  }
+}
+
 // Delete node
 function deleteNode() {
   if (!selectedNodeId) return;
@@ -294,27 +364,12 @@ function deleteNode() {
 
 // Run workflow
 async function runWorkflow() {
-  const workflowNodes = nodes.get().map(n => ({
-    id: n.id,
-    type: nodeConfigs[n.id].nodeType,
-    config: { ...nodeConfigs[n.id] },
-    position: network.getPosition(n.id)
-  }));
+  const workflowDef = getWorkflowDefinition();
 
-  const workflowEdges = edges.get().map(e => ({
-    source: e.from,
-    target: e.to
-  }));
-
-  if (workflowNodes.length === 0) {
+  if (workflowDef.nodes.length === 0) {
     alert('Add some nodes first!');
     return;
   }
-
-  const workflowDef = {
-    nodes: workflowNodes,
-    edges: workflowEdges
-  };
 
   console.log('Executing workflow:', workflowDef);
 
@@ -376,6 +431,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('closeConfigBtn').addEventListener('click', hideConfigPanel);
   document.getElementById('saveConfigBtn').addEventListener('click', saveConfig);
   document.getElementById('deleteNodeBtn').addEventListener('click', deleteNode);
+  document.getElementById('deployBtn')?.addEventListener('click', async () => {
+    await saveWorkflow();
+    // Re-render config if current node is webhook to show the URL
+    if (selectedNodeId && nodeConfigs[selectedNodeId].nodeType === 'webhook_trigger') {
+      showConfigPanel(selectedNodeId);
+    }
+  });
   document.getElementById('closeResultBtn').addEventListener('click', () => {
     document.getElementById('resultModal').classList.add('hidden');
   });

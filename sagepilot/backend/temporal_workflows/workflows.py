@@ -4,13 +4,14 @@ from .activities import (
     execute_manual_trigger,
     execute_transform_data,
     execute_end,
-    decision_node
+    decision_node,
+    execute_webhook_trigger
 )
 
 @workflow.defn
 class WorkflowExecution:
     @workflow.run
-    async def run(self, workflow_def: dict) -> dict:
+    async def run(self, workflow_def: dict, input_payload: dict = None) -> dict:
         """Execute workflow following edges, with decision_node overrides for routing"""
         execution_trace = []
         
@@ -18,13 +19,13 @@ class WorkflowExecution:
         nodes = {node["id"]: node for node in workflow_def["nodes"]}
         edges = workflow_def["edges"]
         
-        # Find starting node
-        start_node = next((n for n in workflow_def["nodes"] if n["type"] == "manual_trigger"), None)
+        # Find starting node (either manual or webhook)
+        start_node = next((n for n in workflow_def["nodes"] if n["type"] in ["manual_trigger", "webhook_trigger"]), None)
         if not start_node:
-            raise ValueError("No manual_trigger node found to start workflow")
+            raise ValueError("No valid start node (manual_trigger or webhook_trigger) found")
         
         current_node_id = start_node["id"]
-        current_payload = None
+        current_payload = input_payload # Use input payload if provided (for webhook)
         
         # Execute nodes following edges
         while current_node_id:
@@ -42,6 +43,14 @@ class WorkflowExecution:
                     args=[config, current_payload],
                     start_to_close_timeout=timedelta(seconds=30)
                 )
+
+            elif node_type == "webhook_trigger":
+                current_payload = await workflow.execute_activity(
+                    execute_webhook_trigger,
+                    args=[config, current_payload],
+                    start_to_close_timeout=timedelta(seconds=30)
+                )
+                
                 
             elif node_type == "transform_data":
                 current_payload = await workflow.execute_activity(

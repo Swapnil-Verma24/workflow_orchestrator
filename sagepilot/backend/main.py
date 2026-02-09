@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from temporalio.client import Client
 import uuid
@@ -16,6 +16,58 @@ app.add_middleware(
 
 # Store to track workflows (in-memory for now)
 executions = {}
+stored_workflows = {} # Added for webhook functionality
+
+@app.post("/api/webhooks/{workflow_id}", status_code=202)
+async def webhook_trigger(workflow_id: str, request: Request):
+    """Trigger a workflow via webhook"""
+    if workflow_id not in stored_workflows:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    workflow_def = stored_workflows[workflow_id]
+    
+    try:
+        payload = await request.json()
+    except:
+        payload = {}
+
+    try:
+        # Connect to Temporal
+        client = await Client.connect("localhost:7233")
+        
+        run_id = f"webhook-{uuid.uuid4()}"
+        
+        # Start workflow with payload
+        handle = await client.start_workflow(
+            "WorkflowExecution",
+            args=[workflow_def, payload], # Pass payload as second argument
+            id=run_id,
+            task_queue="workflow-execution-queue"
+        )
+        
+        # Store execution info
+        executions[run_id] = {
+            "run_id": run_id,
+            "status": "running",
+            "workflow_def": workflow_def,
+            "trigger": "webhook",
+            "initial_payload": payload
+        }
+        
+        return {
+            "run_id": run_id,
+            "status": "pending",
+            "message": "Workflow triggered via webhook"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/workflows")
+async def save_workflow(workflow_def: dict):
+    """Save a new workflow (Required for Webhook Trigger)"""
+    workflow_id = str(uuid.uuid4())
+    stored_workflows[workflow_id] = workflow_def
+    return {"id": workflow_id, "message": "Workflow deployed successfully"}
 
 @app.get("/")
 async def root():

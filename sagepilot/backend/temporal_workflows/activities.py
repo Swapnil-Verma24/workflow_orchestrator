@@ -6,6 +6,11 @@ async def execute_manual_trigger(config: dict, payload: dict) -> dict:
     return config.get("initial_payload", {})
 
 @activity.defn
+async def execute_webhook_trigger(config: dict, payload: dict) -> dict:
+    """Webhook trigger returns the payload passed from the webhook"""
+    return payload or {}
+
+@activity.defn
 async def execute_transform_data(config: dict, payload: dict) -> dict:
     """Transform data based on config"""
     transformation_type = config.get("transformation_type")
