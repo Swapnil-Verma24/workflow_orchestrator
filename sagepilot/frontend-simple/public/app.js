@@ -13,6 +13,8 @@ const defaultConfigs = {
   transform_data: { transformation_type: 'uppercase', target_field: 'message', parameters: { factor: 2 } },
   decision_node: { conditions: [{ field: 'value', operator: 'equals', value: 42, true_node: '', false_node: '' }] },
   webhook_trigger: {},
+  http_request: { url: 'https://jsonplaceholder.typicode.com/posts/1', method: 'GET', headers: '{}', body: '' },
+  wait: { duration: 5, unit: 'seconds' },
   end: {}
 };
 
@@ -22,6 +24,8 @@ const nodeColors = {
   transform_data: { background: '#fde047', border: '#eab308' },
   decision_node: { background: '#fdba74', border: '#f97316' },
   webhook_trigger: { background: '#d8b4fe', border: '#a855f7' },
+  http_request: { background: '#93c5fd', border: '#3b82f6' },
+  wait: { background: '#fef08a', border: '#eab308' },
   end: { background: '#fca5a5', border: '#ef4444' }
 };
 
@@ -31,6 +35,8 @@ const nodeLabels = {
   transform_data: '🔄 Transform',
   decision_node: '🔀 Decision',
   webhook_trigger: '⚡ Webhook',
+  http_request: '🌐 HTTP Request',
+  wait: '⏳ Wait',
   end: '🏁 End'
 };
 
@@ -245,6 +251,46 @@ function buildConfigForm(nodeType, config) {
       `;
       break;
 
+    case 'http_request':
+      html = `
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">URL (supports {{handlebars}})</label>
+          <input type="text" id="config_url" value="${config.url}" class="w-full p-2 border border-gray-300 rounded font-mono text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Method</label>
+          <select id="config_method" class="w-full p-2 border border-gray-300 rounded">
+            <option value="GET" ${config.method === 'GET' ? 'selected' : ''}>GET</option>
+            <option value="POST" ${config.method === 'POST' ? 'selected' : ''}>POST</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Headers (JSON)</label>
+          <textarea id="config_headers" class="w-full h-20 p-2 border border-gray-300 rounded font-mono text-sm">${config.headers}</textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Body Template (for POST)</label>
+          <textarea id="config_body" class="w-full h-32 p-2 border border-gray-300 rounded font-mono text-sm">${config.body}</textarea>
+        </div>
+      `;
+      break;
+
+    case 'wait':
+      html = `
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Wait Duration</label>
+          <input type="number" id="config_duration" value="${config.duration}" class="w-full p-2 border border-gray-300 rounded">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Unit</label>
+          <select id="config_unit" class="w-full p-2 border border-gray-300 rounded">
+            <option value="seconds" ${config.unit === 'seconds' ? 'selected' : ''}>Seconds</option>
+            <option value="minutes" ${config.unit === 'minutes' ? 'selected' : ''}>Minutes</option>
+          </select>
+        </div>
+      `;
+      break;
+
     default:
       html = '<div class="text-gray-500 text-sm">No configuration needed for this node type.</div>';
   }
@@ -293,6 +339,18 @@ function saveConfig() {
           false_node: document.querySelector(`.condition-false-node[data-idx="${idx}"]`).value
         });
       });
+      break;
+
+    case 'http_request':
+      config.url = document.getElementById('config_url').value;
+      config.method = document.getElementById('config_method').value;
+      config.headers = document.getElementById('config_headers').value;
+      config.body = document.getElementById('config_body').value;
+      break;
+
+    case 'wait':
+      config.duration = Number(document.getElementById('config_duration').value);
+      config.unit = document.getElementById('config_unit').value;
       break;
   }
 
@@ -343,7 +401,7 @@ async function saveWorkflow() {
     const result = await response.json();
     if (result.id) {
       currentWorkflowId = result.id;
-      alert(`✅ Workflow deployed! ID: ${currentWorkflowId}`);
+      alert(`✅ Workflow deployed! ID: ${currentWorkflowId} `);
     }
   } catch (error) {
     alert('❌ Error deploying workflow: ' + error.message);
@@ -383,11 +441,23 @@ async function runWorkflow() {
     const result = await response.json();
     console.log('Workflow started:', result);
 
-    // Wait for completion
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    const runId = result.run_id;
+    let executionResult = null;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 seconds max polling for now
 
-    const statusResponse = await fetch(`http://localhost:8000/api/executions/${result.run_id}`);
-    const executionResult = await statusResponse.json();
+    // Poll for completion
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      attempts++;
+
+      const statusResponse = await fetch(`http://localhost:8000/api/executions/${runId}`);
+      executionResult = await statusResponse.json();
+
+      if (executionResult.status === 'completed' || executionResult.status === 'failed') {
+        break;
+      }
+    }
 
     // Show result
     document.getElementById('resultContent').textContent = JSON.stringify(executionResult, null, 2);

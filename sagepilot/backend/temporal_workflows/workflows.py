@@ -5,7 +5,8 @@ from .activities import (
     execute_transform_data,
     execute_end,
     decision_node,
-    execute_webhook_trigger
+    execute_webhook_trigger,
+    execute_http_request
 )
 
 @workflow.defn
@@ -51,6 +52,21 @@ class WorkflowExecution:
                     start_to_close_timeout=timedelta(seconds=30)
                 )
                 
+            elif node_type == "http_request":
+                current_payload = await workflow.execute_activity(
+                    execute_http_request,
+                    args=[config, current_payload],
+                    start_to_close_timeout=timedelta(seconds=30)
+                )
+
+            elif node_type == "wait":
+                import asyncio
+                duration = config.get("duration", 0)
+                unit = config.get("unit", "seconds")
+                if unit == "minutes":
+                    duration *= 60
+                await asyncio.sleep(duration)
+                # Payload remains the same after wait
                 
             elif node_type == "transform_data":
                 current_payload = await workflow.execute_activity(
