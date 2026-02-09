@@ -9,33 +9,24 @@ let network = null;
 // Default configurations for each node type
 const defaultConfigs = {
   manual_trigger: { initial_payload: { message: 'hello', value: 42 } },
-  webhook_trigger: { webhook_url: '/api/webhooks/...' },
-  http_request: { url: 'https://api.example.com', method: 'GET', headers: {}, body_template: '' },
-  transform_data: { transformation_type: 'uppercase', target_field: 'message', parameters: {} },
-  decision: { target_field: 'status', operator: 'equals', comparison_value: 'active' },
-  wait: { duration: 30, unit: 'seconds' },
+  transform_data: { transformation_type: 'uppercase', target_field: 'message', parameters: { factor: 2 } },
+  decision_node: { conditions: [{ field: 'value', operator: 'equals', value: 42, true_node: '', false_node: '' }] },
   end: {}
 };
 
 // Node type colors
 const nodeColors = {
   manual_trigger: { background: '#86efac', border: '#22c55e' },
-  webhook_trigger: { background: '#93c5fd', border: '#3b82f6' },
-  http_request: { background: '#c4b5fd', border: '#8b5cf6' },
   transform_data: { background: '#fde047', border: '#eab308' },
-  decision: { background: '#fdba74', border: '#f97316' },
-  wait: { background: '#a5b4fc', border: '#6366f1' },
+  decision_node: { background: '#fdba74', border: '#f97316' },
   end: { background: '#fca5a5', border: '#ef4444' }
 };
 
 // Node type labels
 const nodeLabels = {
   manual_trigger: '▶ Manual Trigger',
-  webhook_trigger: '🔗 Webhook',
-  http_request: '🌐 HTTP Request',
   transform_data: '🔄 Transform',
-  decision: '🔀 Decision',
-  wait: '⏱ Wait',
+  decision_node: '🔀 Decision',
   end: '🏁 End'
 };
 
@@ -44,7 +35,7 @@ const nodeLabels = {
 function initNetwork() {
   const container = document.getElementById('network');
   const data = { nodes, edges };
-  
+
   const options = {
     physics: {
       enabled: false
@@ -57,7 +48,7 @@ function initNetwork() {
     manipulation: {
       enabled: true,  // ← Changed to true
       addNode: false,  // Disable default node creation
-      addEdge: function(edgeData, callback) {
+      addEdge: function (edgeData, callback) {
         // Allow edge creation
         if (edgeData.from !== edgeData.to) {
           edgeData.arrows = 'to';
@@ -68,7 +59,7 @@ function initNetwork() {
       },
       editEdge: false,
       deleteNode: false,
-      deleteEdge: function(edgeData, callback) {
+      deleteEdge: function (edgeData, callback) {
         if (confirm('Delete this connection?')) {
           callback(edgeData);
         } else {
@@ -95,7 +86,7 @@ function initNetwork() {
   network = new vis.Network(container, data, options);
 
   // Event listeners
-  network.on('click', function(params) {
+  network.on('click', function (params) {
     if (params.nodes.length > 0) {
       selectedNodeId = params.nodes[0];
       showConfigPanel(selectedNodeId);
@@ -111,7 +102,7 @@ function initNetwork() {
 function addNode(type) {
   nodeCounter++;
   const nodeId = `${type}_${nodeCounter}`;
-  
+
   const newNode = {
     id: nodeId,
     label: nodeLabels[type],
@@ -122,13 +113,13 @@ function addNode(type) {
   };
 
   // Add decision node with special handles
-  if (type === 'decision') {
+  if (type === 'decision_node') {
     newNode.shape = 'diamond';
   }
 
   nodes.add(newNode);
   nodeConfigs[nodeId] = { ...defaultConfigs[type], nodeType: type };
-  
+
   // Position new node in center
   const position = network.getViewPosition();
   network.moveNode(nodeId, position.x, position.y);
@@ -147,6 +138,9 @@ function showConfigPanel(nodeId) {
   // Build form based on node type
   const form = document.getElementById('configForm');
   form.innerHTML = buildConfigForm(nodeType, config);
+
+  // Add event listener for add condition button if it exists
+
 }
 
 // Hide configuration panel
@@ -169,21 +163,7 @@ function buildConfigForm(nodeType, config) {
       `;
       break;
 
-    case 'http_request':
-      html = `
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">URL</label>
-          <input type="text" id="config_url" value="${config.url}" class="w-full p-2 border border-gray-300 rounded" placeholder="https://api.example.com/data">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Method</label>
-          <select id="config_method" class="w-full p-2 border border-gray-300 rounded">
-            <option value="GET" ${config.method === 'GET' ? 'selected' : ''}>GET</option>
-            <option value="POST" ${config.method === 'POST' ? 'selected' : ''}>POST</option>
-          </select>
-        </div>
-      `;
-      break;
+
 
     case 'transform_data':
       html = `
@@ -192,59 +172,59 @@ function buildConfigForm(nodeType, config) {
           <select id="config_transformation_type" class="w-full p-2 border border-gray-300 rounded">
             <option value="uppercase" ${config.transformation_type === 'uppercase' ? 'selected' : ''}>Uppercase</option>
             <option value="multiply" ${config.transformation_type === 'multiply' ? 'selected' : ''}>Multiply</option>
-            <option value="append" ${config.transformation_type === 'append' ? 'selected' : ''}>Append</option>
-            <option value="extract" ${config.transformation_type === 'extract' ? 'selected' : ''}>Extract</option>
           </select>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Target Field</label>
-          <input type="text" id="config_target_field" value="${config.target_field}" class="w-full p-2 border border-gray-300 rounded">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Factor (for Multiply)</label>
+          <input type="number" id="config_factor" value="${(config.parameters || {}).factor || 2}" class="w-full p-2 border border-gray-300 rounded" placeholder="e.g., 2">
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Factor (for multiply)</label>
-          <input type="number" id="config_factor" value="${config.parameters?.factor || 1}" class="w-full p-2 border border-gray-300 rounded">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Target Field</label>
+          <input type="text" id="config_target_field" value="${config.target_field}" class="w-full p-2 border border-gray-300 rounded" placeholder="e.g., message, value">
         </div>
       `;
       break;
 
-    case 'decision':
+    case 'decision_node':
       html = `
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Target Field</label>
-          <input type="text" id="config_target_field" value="${config.target_field}" class="w-full p-2 border border-gray-300 rounded">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Operator</label>
-          <select id="config_operator" class="w-full p-2 border border-gray-300 rounded">
-            <option value="equals" ${config.operator === 'equals' ? 'selected' : ''}>Equals</option>
-            <option value="not_equals" ${config.operator === 'not_equals' ? 'selected' : ''}>Not Equals</option>
-            <option value="greater_than" ${config.operator === 'greater_than' ? 'selected' : ''}>Greater Than</option>
-            <option value="less_than" ${config.operator === 'less_than' ? 'selected' : ''}>Less Than</option>
-            <option value="contains" ${config.operator === 'contains' ? 'selected' : ''}>Contains</option>
-          </select>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Comparison Value</label>
-          <input type="text" id="config_comparison_value" value="${config.comparison_value}" class="w-full p-2 border border-gray-300 rounded">
-        </div>
+        <div class="border-t pt-4">
+          <label class="block text-sm font-bold text-gray-700 mb-3">Conditions</label>
+          <div id="conditionsList" class="space-y-4 mb-4">
+            ${(config.conditions || []).map((cond, idx) => `
+              <div class="p-3 bg-gray-50 rounded border border-gray-200">
+                <div class="mb-2">
+                  <label class="block text-sm font-medium text-gray-600">Field</label>
+                  <input type="text" class="condition-field w-full p-2 border border-gray-300 rounded text-sm" data-idx="${idx}" value="${cond.field || ''}" placeholder="e.g., value, status">
+                </div>
+                <div class="mb-2">
+                  <label class="block text-sm font-medium text-gray-600">Operator</label>
+                  <select class="condition-operator w-full p-2 border border-gray-300 rounded text-sm" data-idx="${idx}">
+                    <option value="equals" ${cond.operator === 'equals' ? 'selected' : ''}>equals</option>
+                    <option value="greater_than" ${cond.operator === 'greater_than' ? 'selected' : ''}>greater_than</option>
+                    <option value="less_than" ${cond.operator === 'less_than' ? 'selected' : ''}>less_than</option>
+                  </select>
+                </div>
+                <div class="mb-2">
+                  <label class="block text-sm font-medium text-gray-600">Value</label>
+                  <input type="text" class="condition-value w-full p-2 border border-gray-300 rounded text-sm" data-idx="${idx}" value="${cond.value || ''}" placeholder="e.g., 42, active">
+                </div>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-600">True Node</label>
+                    <input type="text" class="condition-true-node w-full p-2 border border-gray-300 rounded text-sm" data-idx="${idx}" value="${cond.true_node || ''}" placeholder="e.g., transform_data_1">
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-600">False Node</label>
+                    <input type="text" class="condition-false-node w-full p-2 border border-gray-300 rounded text-sm" data-idx="${idx}" value="${cond.false_node || ''}" placeholder="e.g., end_1">
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+
       `;
       break;
 
-    case 'wait':
-      html = `
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Duration</label>
-          <input type="number" id="config_duration" value="${config.duration}" class="w-full p-2 border border-gray-300 rounded">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Unit</label>
-          <select id="config_unit" class="w-full p-2 border border-gray-300 rounded">
-            <option value="seconds" ${config.unit === 'seconds' ? 'selected' : ''}>Seconds</option>
-            <option value="minutes" ${config.unit === 'minutes' ? 'selected' : ''}>Minutes</option>
-          </select>
-        </div>
-      `;
-      break;
+
 
     default:
       html = '<div class="text-gray-500 text-sm">No configuration needed for this node type.</div>';
@@ -271,26 +251,29 @@ function saveConfig() {
       }
       break;
 
-    case 'http_request':
-      config.url = document.getElementById('config_url').value;
-      config.method = document.getElementById('config_method').value;
-      break;
-
     case 'transform_data':
       config.transformation_type = document.getElementById('config_transformation_type').value;
       config.target_field = document.getElementById('config_target_field').value;
-      config.parameters = { factor: parseFloat(document.getElementById('config_factor').value) };
+      config.parameters = { factor: Number(document.getElementById('config_factor').value) || 1 };
       break;
 
-    case 'decision':
-      config.target_field = document.getElementById('config_target_field').value;
-      config.operator = document.getElementById('config_operator').value;
-      config.comparison_value = document.getElementById('config_comparison_value').value;
-      break;
-
-    case 'wait':
-      config.duration = parseInt(document.getElementById('config_duration').value);
-      config.unit = document.getElementById('config_unit').value;
+    case 'decision_node':
+      config.conditions = [];
+      document.querySelectorAll('.condition-field').forEach(elem => {
+        const idx = elem.dataset.idx;
+        let val = document.querySelector(`.condition-value[data-idx="${idx}"]`).value;
+        // Parse number if possible
+        if (!isNaN(val) && val.trim() !== '') {
+          val = Number(val);
+        }
+        config.conditions.push({
+          field: elem.value,
+          operator: document.querySelector(`.condition-operator[data-idx="${idx}"]`).value,
+          value: val,
+          true_node: document.querySelector(`.condition-true-node[data-idx="${idx}"]`).value,
+          false_node: document.querySelector(`.condition-false-node[data-idx="${idx}"]`).value
+        });
+      });
       break;
   }
 
