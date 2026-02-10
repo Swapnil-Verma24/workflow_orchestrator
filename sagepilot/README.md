@@ -8,7 +8,7 @@ A simplified workflow automation engine inspired by tools like n8n and Zapier, b
 *   **Durable Execution**: Orchestrated by Temporal, ensuring workflows survive failures and server restarts.
 *   **Rich Node Library**:
     *   **Triggers**: Manual (JSON payload), Webhook (HTTP POST).
-    *   **Actions**: HTTP Request, Transform Data (Append, Prepend, Extract, Multiply, Uppercase).
+    *   **Actions**: HTTP Request, Transform Data (Multiply, Uppercase).
     *   **Logic**: Decision (Branching with operators), Wait (Durable timers).
 *   **Real-time Feedback**: Live execution tracing status polling.
 *   **Configuration Management**: Server-validated node configurations persisted in SQLite.
