@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from temporalio.client import Client
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 import uuid
 import asyncio
 import json
@@ -27,17 +28,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store to track workflows (in-memory for now)
+# Store to track executions (in-memory is fine for logs/status in this assignment)
 executions = {}
-stored_workflows = {} # Added for webhook functionality
 
 @app.post("/api/webhooks/{workflow_id}", status_code=202)
-async def webhook_trigger(workflow_id: str, request: Request):
-    """Trigger a workflow via webhook"""
-    if workflow_id not in stored_workflows:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+async def webhook_trigger(workflow_id: str, request: Request, db: Session = Depends(get_db)):
+    """Trigger a workflow via webhook using database lookup"""
+    # Try to find by ID (if it's a number) or Name
+    workflow = None
+    if workflow_id.isdigit():
+        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.id == int(workflow_id)).first()
     
-    workflow_def = stored_workflows[workflow_id]
+    if not workflow:
+        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_id).first()
+        
+    if not workflow:
+        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+    
+    workflow_def = json.loads(workflow.workflow_data)
     
     try:
         payload = await request.json()
@@ -53,7 +61,7 @@ async def webhook_trigger(workflow_id: str, request: Request):
         # Start workflow with payload
         handle = await client.start_workflow(
             "WorkflowExecution",
-            args=[workflow_def, payload], # Pass payload as second argument
+            args=[workflow_def, payload],
             id=run_id,
             task_queue="workflow-execution-queue"
         )
@@ -76,20 +84,75 @@ async def webhook_trigger(workflow_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/workflows")
-async def save_workflow(workflow_def: dict):
-    """Save a new workflow (Required for Webhook Trigger)"""
-    # Validate workflow structure and check for cycles
+async def deploy_workflow(workflow_def: dict, db: Session = Depends(get_db)):
+    """Deploy/Save a workflow to database for webhook activation"""
     is_valid, error_msg = validate_workflow_structure(workflow_def)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
     
-    workflow_id = str(uuid.uuid4())
-    stored_workflows[workflow_id] = workflow_def
-    return {"id": workflow_id, "message": "Workflow deployed successfully"}
+    # Use provided ID or generate a name if not present
+    name = workflow_def.get("name") or f"Deployed-{str(uuid.uuid4())[:8]}"
+    
+    # Save to database
+    new_workflow = SavedWorkflow(
+        name=name,
+        workflow_data=json.dumps(workflow_def)
+    )
+    db.add(new_workflow)
+    db.commit()
+    db.refresh(new_workflow)
+    
+    return {"id": new_workflow.id, "name": new_workflow.name, "message": "Workflow deployed successfully"}
 
 @app.get("/")
 async def root():
     return {"message": "SagePilot Workflow Engine", "status": "running"}
+
+@app.get("/api/workflows/{workflow_id}/export")
+async def export_workflow(workflow_id: str, db: Session = Depends(get_db)):
+    """Export workflow as a portable JSON document"""
+    workflow = None
+    if workflow_id.isdigit():
+        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.id == int(workflow_id)).first()
+    
+    if not workflow:
+        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_id).first()
+        
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    
+    return json.loads(workflow.workflow_data)
+
+@app.post("/api/workflows/import")
+async def import_workflow(workflow_data: dict, db: Session = Depends(get_db)):
+    """Import a previously exported JSON and reconstruct the workflow"""
+    name = workflow_data.get("name") or f"Imported-{str(uuid.uuid4())[:8]}"
+    
+    # Save to database
+    new_workflow = SavedWorkflow(
+        name=name,
+        workflow_data=json.dumps(workflow_data)
+    )
+    db.add(new_workflow)
+    db.commit()
+    db.refresh(new_workflow)
+    
+    return {"id": new_workflow.id, "name": name, "message": "Workflow imported successfully"}
+
+@app.put("/api/workflows/{workflow_id}")
+async def update_workflow_by_id(workflow_id: str, workflow_def: dict, db: Session = Depends(get_db)):
+    """Update an existing workflow by ID"""
+    workflow = None
+    if workflow_id.isdigit():
+        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.id == int(workflow_id)).first()
+    
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+        
+    workflow.workflow_data = json.dumps(workflow_def)
+    db.commit()
+    
+    return {"message": "Workflow updated successfully"}
 
 @app.post("/api/workflows/execute")
 async def execute_workflow(workflow_def: dict):
@@ -97,10 +160,7 @@ async def execute_workflow(workflow_def: dict):
     # Validate workflow structure and check for cycles
     is_valid, error_msg = validate_workflow_structure(workflow_def)
     if not is_valid:
-        return {
-            "error": error_msg,
-            "message": "Workflow validation failed"
-        }
+        raise HTTPException(status_code=400, detail=error_msg)
     
     try:
         # Connect to Temporal
@@ -129,10 +189,7 @@ async def execute_workflow(workflow_def: dict):
             "workflow_id": run_id
         }
     except Exception as e:
-        return {
-            "error": str(e),
-            "message": "Failed to start workflow. Is Temporal server running?"
-        }
+        raise HTTPException(status_code=500, detail=f"Failed to start workflow: {str(e)}")
 
 @app.get("/api/executions/{run_id}")
 async def get_execution(run_id: str):
@@ -314,10 +371,25 @@ async def list_saved_workflows(db: Session = Depends(get_db)):
 @app.get("/api/workflows/saved/{workflow_name}")
 async def load_workflow_from_db(workflow_name: str, db: Session = Depends(get_db)):
     """Load a specific workflow by name"""
+    import os
+    print(f"DEBUG: Request to load '{workflow_name}'")
+    print(f"DEBUG: CWD: {os.getcwd()}")
+    
+    # Check all workflows to see what's actually there
+    all_wfs = db.query(SavedWorkflow).all()
+    print(f"DEBUG: Available workflows: {[w.name for w in all_wfs]}")
+    
     workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_name).first()
     
     if not workflow:
-        raise HTTPException(status_code=404, detail="Workflow not found")
+        print(f"DEBUG: Workflow '{workflow_name}' not found in DB")
+        # Try case-insensitive matching if exact match fails
+        workflow = db.query(SavedWorkflow).filter(func.lower(SavedWorkflow.name) == workflow_name.lower()).first()
+        if workflow:
+             print(f"DEBUG: Found case-insensitive match: '{workflow.name}'")
+        else:
+             print(f"DEBUG: No match found even with case-insensitive search")
+             raise HTTPException(status_code=404, detail=f"Workflow '{workflow_name}' not found. Available: {[w.name for w in all_wfs]}")
     
     return workflow.to_dict()
 

@@ -19,15 +19,16 @@ async def execute_http_request(config: dict, payload: dict) -> dict:
     headers_raw = config.get("headers", "{}")
     body_template = config.get("body", "")
     
-    # Simple template rendering using Jinja2 if needed, or just basic f-string style
-    # For now, let's just use payload directly in a simple way or allow {{key}} replacement
     import jinja2
     import httpx
     
     try:
         template_env = jinja2.Environment()
-        url = template_env.from_string(url_template).render(**payload) if payload else url_template
-        body_str = template_env.from_string(body_template).render(**payload) if payload else body_template
+        try:
+            url = template_env.from_string(url_template).render(**payload) if payload else url_template
+            body_str = template_env.from_string(body_template).render(**payload) if payload else body_template
+        except Exception as te:
+            return {"error": f"Template rendering failed: {str(te)}", "status": "failed"}
         
         try:
             headers = json.loads(headers_raw)
@@ -47,67 +48,89 @@ async def execute_http_request(config: dict, payload: dict) -> dict:
             else:
                 return {"error": f"Unsupported method: {method}"}
             
+            # Payload truncation for large responses (approx 1MB limit for serialization safety)
+            MAX_RESPONSE_SIZE = 1 * 1024 * 1024 # 1MB
+            
             try:
-                return response.json()
-            except:
-                return {"text": response.text, "status_code": response.status_code}
+                content_type = response.headers.get("content-type", "")
+                if "application/json" in content_type:
+                    resp_data = response.json()
+                else:
+                    resp_data = {"text": response.text[:MAX_RESPONSE_SIZE // 10], "status_code": response.status_code}
+                
+                # Check serialized size roughly
+                if len(json.dumps(resp_data)) > MAX_RESPONSE_SIZE:
+                    return {"error": "Response size exceeds 1MB limit for safety", "status_code": response.status_code}
+                    
+                return resp_data
+            except Exception as e:
+                return {"text": response.text[:1000] if response.text else "", "status_code": response.status_code, "parse_error": str(e)}
                 
     except Exception as e:
         return {"error": str(e), "status": "failed"}
 
 @activity.defn
 async def execute_transform_data(config: dict, payload: dict) -> dict:
-    """Transform data based on config"""
+    """Transform data based on config with safety checks"""
     transformation_type = config.get("transformation_type")
     target_field = config.get("target_field")
     parameters = config.get("parameters", {})
     
     result = payload.copy() if payload else {}
     
-    if transformation_type == "multiply" and target_field in result:
-        factor = parameters.get("factor", 1)
-        result[target_field] = result[target_field] * factor
-    elif transformation_type == "uppercase" and target_field in result:
-        result[target_field] = str(result[target_field]).upper()
-    
+    if not target_field:
+        return result
+
+    try:
+        if transformation_type == "multiply" and target_field in result:
+            factor = parameters.get("factor", 1)
+            # Safe multiplication check
+            val = result[target_field]
+            if isinstance(val, (int, float, str)):
+                try:
+                    num_val = float(val)
+                    result[target_field] = num_val * factor
+                except (ValueError, TypeError):
+                    # If it's a string that can't be float, don't crash
+                    pass
+        elif transformation_type == "uppercase" and target_field in result:
+            result[target_field] = str(result[target_field]).upper()
+    except Exception as e:
+        # Prevent activity from crashing the workflow
+        print(f"Transformation error: {str(e)}")
+        
     return result
 @activity.defn
-async def decision_node(config: dict, payload: dict) -> dict:
-    """Decision node routes based on conditions - handles both true and false cases"""
-    conditions = config.get("conditions", [])
+async def evaluate_decision(config: dict, payload: dict) -> dict:
+    """Evaluate decision condition and return boolean result"""
+    field = config.get("field")
+    operator = config.get("operator", "equals")
+    value = config.get("value")
     
-    for condition in conditions:
-        field = condition.get("field")
-        operator = condition.get("operator")
-        value = condition.get("value")
-        true_node = condition.get("true_node")
-        false_node = condition.get("false_node")
+    if not field:
+        return {"condition_met": False, "payload": payload, "error": "No field configured"}
         
-        # Field MUST exist in payload - if missing, it's a workflow/config error
-        if field not in payload:
-            raise ValueError(
-                f"Decision node validation error: Required field '{field}' not found in payload. "
-                f"Available fields: {list(payload.keys())}. "
-            )
-        
-        # Evaluate condition
-        condition_met = False
-        if operator == "equals" and payload[field] == value:
-            condition_met = True
-        elif operator == "greater_than" and payload[field] > value:
-            condition_met = True
-        elif operator == "less_than" and payload[field] < value:
-            condition_met = True
-        
-        # Return based on condition result
-        # UI guarantees both true_node and false_node are defined
-        if condition_met:
-            return {"next_node": true_node, "payload": payload}
-        else:
-            return {"next_node": false_node, "payload": payload}
+    if field not in payload:
+         return {"condition_met": False, "payload": payload, "error": f"Field {field} not in payload"}
+
+    condition_met = False
+    actual_value = payload[field]
     
-    # Default if no conditions provided
-    return {"next_node": None, "payload": payload, "error": "No conditions found in decision node"}
+    # Simple type coercion for comparison
+    try:
+        if isinstance(value, (int, float)) and not isinstance(actual_value, (int, float)):
+            actual_value = float(actual_value)
+    except:
+        pass
+
+    if operator == "equals":
+        condition_met = str(actual_value) == str(value)
+    elif operator == "greater_than":
+        condition_met = float(actual_value) > float(value)
+    elif operator == "less_than":
+        condition_met = float(actual_value) < float(value)
+    
+    return {"condition_met": condition_met, "payload": payload}
 
 @activity.defn
 async def execute_end(config: dict, payload: dict) -> dict:
