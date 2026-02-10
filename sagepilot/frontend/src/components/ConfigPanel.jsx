@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Trash2, Settings, List, Activity } from 'lucide-react';
+import { X, Save, Trash2, Settings, List, Activity, Copy, Check } from 'lucide-react';
 import useWorkflowStore from '../store/useWorkflowStore';
 import ExecutionResults from './ExecutionResults';
 
@@ -10,15 +10,20 @@ const ConfigPanel = () => {
         updateNodeConfig,
         deleteNode,
         setSelectedNode,
-        activeExecution
+        activeExecution,
+        addToast,
+        currentWorkflowId
     } = useWorkflowStore();
 
     const [config, setConfig] = useState({});
+    const [rawJson, setRawJson] = useState('');
     const [activeTab, setActiveTab] = useState('config'); // 'config' or 'execution'
 
     useEffect(() => {
         if (selectedNode) {
-            setConfig(nodeConfigs[selectedNode.id] || {});
+            const nodeConfig = nodeConfigs[selectedNode.id] || {};
+            setConfig(nodeConfig);
+            setRawJson(JSON.stringify(nodeConfig.initial_payload || {}, null, 2));
             setActiveTab('config');
         }
     }, [selectedNode, nodeConfigs]);
@@ -37,7 +42,7 @@ const ConfigPanel = () => {
     const handleSave = () => {
         if (selectedNode) {
             updateNodeConfig(selectedNode.id, config);
-            alert('✅ Configuration updated locally');
+            addToast('✅ Configuration updated locally', 'success');
         }
     };
 
@@ -45,20 +50,68 @@ const ConfigPanel = () => {
         if (!selectedNode) return <div className="text-center p-8 text-slate-400 italic">Select a node to configure</div>;
 
         switch (nodeType) {
+            case 'webhook_trigger':
+                const identifier = currentWorkflowId || "{save_or_deploy_to_get_id}";
+                const webhookUrl = `http://localhost:8000/api/webhooks/${identifier}`;
+                return (
+                    <div className="space-y-4">
+                        <div className={`p-4 rounded-2xl border ${currentWorkflowId ? 'bg-indigo-50 border-indigo-100' : 'bg-amber-50 border-amber-100'}`}>
+                            <label className={`block text-[10px] font-bold uppercase tracking-widest mb-2 ${currentWorkflowId ? 'text-indigo-400' : 'text-amber-500'}`}>
+                                {currentWorkflowId ? 'Your Webhook URL' : 'URL NOT READY'}
+                            </label>
+                            <div className="flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                <code className={`flex-1 text-[11px] font-mono truncate ${currentWorkflowId ? 'text-slate-600' : 'text-slate-400 italic'}`}>
+                                    {webhookUrl}
+                                </code>
+                                {currentWorkflowId && (
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(webhookUrl);
+                                            addToast('URL copied to clipboard!', 'success');
+                                        }}
+                                        className="p-2 hover:bg-indigo-50 rounded-lg text-indigo-500 transition-colors"
+                                        title="Copy URL"
+                                    >
+                                        <Copy size={16} />
+                                    </button>
+                                )}
+                            </div>
+                            {!currentWorkflowId && (
+                                <p className="text-[10px] text-amber-600 mt-2 font-medium">
+                                    ⚠️ Please save or deploy your workflow first to generate a permanent URL.
+                                </p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-bold text-slate-700">How to use:</h4>
+                            <ul className="text-[11px] text-slate-500 space-y-2 list-disc pl-4">
+                                <li>Deploy this workflow using the <span className="font-bold text-indigo-600">Deploy</span> button first.</li>
+                                <li>Send a <span className="font-mono bg-slate-100 px-1 rounded text-rose-500">POST</span> request to the URL above.</li>
+                                <li>Include your data as a <span className="font-bold italic">JSON body</span>. It will become the starting data for the workflow.</li>
+                            </ul>
+                        </div>
+                    </div>
+                );
+
             case 'manual_trigger':
                 return (
                     <div className="space-y-4">
-                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Initial Payload (JSON)</label>
+                        <div className="flex justify-between items-center">
+                            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">Initial Payload (JSON)</label>
+                            <span className="text-[10px] text-indigo-400 font-medium bg-indigo-50 px-2 py-0.5 rounded-full">Pro Tip: Numbers/Objects work!</span>
+                        </div>
                         <textarea
                             className="w-full h-40 p-4 bg-slate-900 text-emerald-400 font-mono text-xs rounded-2xl outline-none border border-slate-800 focus:border-indigo-500 shadow-inner"
-                            value={JSON.stringify(config.initial_payload || {}, null, 2)}
+                            value={rawJson}
                             onChange={(e) => {
+                                setRawJson(e.target.value);
                                 try {
                                     const val = JSON.parse(e.target.value);
                                     setConfig({ ...config, initial_payload: val });
                                 } catch (err) { }
                             }}
                         />
+                        <p className="text-[10px] text-slate-400 italic">Changes are saved to internal state as you type valid JSON.</p>
                     </div>
                 );
 
@@ -131,10 +184,19 @@ const ConfigPanel = () => {
                             <input
                                 type="text"
                                 className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-indigo-400 font-mono text-sm"
-                                value={config.value || ''}
-                                onChange={(e) => setConfig({ ...config, value: e.target.value })}
-                                placeholder="e.g., active"
+                                value={typeof config.value === 'object' ? JSON.stringify(config.value) : (config.value ?? '')}
+                                onChange={(e) => {
+                                    let val = e.target.value;
+                                    // Try to parse as number or boolean if it's not a clear string
+                                    if (val === 'true') val = true;
+                                    else if (val === 'false') val = false;
+                                    else if (!isNaN(val) && val !== '') val = Number(val);
+
+                                    setConfig({ ...config, value: val });
+                                }}
+                                placeholder="e.g., active or 25"
                             />
+                            <p className="text-[10px] text-slate-400 mt-2">Values like <code className="bg-slate-100 px-1 rounded text-slate-600">25</code> or <code className="bg-slate-100 px-1 rounded text-slate-600">true</code> are automatically treated as their correct types.</p>
                         </div>
                     </div>
                 );

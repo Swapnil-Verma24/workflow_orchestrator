@@ -78,6 +78,10 @@ const Header = () => {
                 name,
                 workflow_data: workflowData
             });
+
+            // Sync current workflow identifier
+            useWorkflowStore.getState().setCurrentWorkflowId(name);
+
             addToast(`Workflow "${name}" saved successfully!`, 'success');
         } catch (error) {
             addToast(error.response?.data?.detail || 'Failed to save workflow', 'error');
@@ -110,6 +114,10 @@ const Header = () => {
             };
 
             const response = await axios.post('http://localhost:8000/api/workflows', workflowDef);
+
+            // Sync current workflow identifier (use name or ID)
+            useWorkflowStore.getState().setCurrentWorkflowId(response.data.name || response.data.id);
+
             addToast(`Workflow deployed! ID: ${response.data.id}`, 'success', 4000);
         } catch (error) {
             addToast(error.response?.data?.detail || 'Failed to deploy workflow', 'error');
@@ -166,6 +174,9 @@ const Header = () => {
             const response = await axios.get(`http://localhost:8000/api/workflows/saved/${name}`);
             const data = response.data;
             if (data.workflow_data) {
+                // Sync current workflow identifier
+                useWorkflowStore.getState().setCurrentWorkflowId(data.name || name);
+
                 let workflow;
                 try {
                     workflow = typeof data.workflow_data === 'string'

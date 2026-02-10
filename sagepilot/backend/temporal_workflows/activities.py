@@ -76,7 +76,10 @@ async def execute_transform_data(config: dict, payload: dict) -> dict:
     target_field = config.get("target_field")
     parameters = config.get("parameters", {})
     
-    result = payload.copy() if payload else {}
+    if isinstance(payload, (int, float, bool, str)):
+        result = {"value": payload}
+    else:
+        result = payload.copy() if payload else {}
     
     if not target_field:
         return result
@@ -116,20 +119,41 @@ async def evaluate_decision(config: dict, payload: dict) -> dict:
     condition_met = False
     actual_value = payload[field]
     
-    # Simple type coercion for comparison
+    # Robust type coercion for comparison
+    print(f"DEBUG Decision: Comparing {actual_value} ({type(actual_value).__name__}) {operator} {value} ({type(value).__name__})")
+    
     try:
-        if isinstance(value, (int, float)) and not isinstance(actual_value, (int, float)):
+        # 1. Handle numeric coercion
+        is_val_num = isinstance(value, (int, float))
+        is_act_num = isinstance(actual_value, (int, float))
+        
+        if is_val_num and not is_act_num:
             actual_value = float(actual_value)
+        elif is_act_num and not is_val_num:
+            try:
+                value = float(value)
+            except: pass
+            
+        # 2. Handle boolean coercion
+        if isinstance(actual_value, bool) and not isinstance(value, bool):
+            if str(value).lower() == "true": value = True
+            elif str(value).lower() == "false": value = False
     except:
         pass
 
     if operator == "equals":
-        condition_met = str(actual_value) == str(value)
+        # Direct comparison
+        condition_met = (actual_value == value)
+        # Fallback string comparison for cases like "5" vs 5.0 or whitespace issues
+        if not condition_met:
+            condition_met = str(actual_value).strip().lower() == str(value).strip().lower()
+            
     elif operator == "greater_than":
         condition_met = float(actual_value) > float(value)
     elif operator == "less_than":
         condition_met = float(actual_value) < float(value)
     
+    print(f"DEBUG Decision: Result = {condition_met}")
     return {"condition_met": condition_met, "payload": payload}
 
 @activity.defn
