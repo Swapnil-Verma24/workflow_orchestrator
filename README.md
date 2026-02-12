@@ -60,45 +60,45 @@ graph TD
 
 ## 🚦 Setup Instructions
 
-### Prerequisites
+This project is configured with a strict separation between **Local Development** and **Production Deployment**.
+
+### 1. Prerequisites
 *   Node.js & npm
 *   Python 3.10+
 *   Temporal Server (running locally)
 
-### 1. Start Temporal Server
-Ensure Temporal is running on your machine.
+### 2. Local Development (4-Terminal Setup)
+
+For local development, we use separate processes for maximum flexibility.
+
+**Terminal 1: Temporal Server**
 ```bash
 temporal server start-dev
 ```
 
-### 2. Backend Setup
-Navigate to the `backend` directory:
+**Terminal 2: Backend API**
 ```bash
-cd backend
-python -m venv .venv
-# Activate virtual environment (Windows: .venv\Scripts\activate, Mac/Linux: source .venv/bin/activate)
-pip install -r requirements.txt
+cd workflow_orchestrator
+# Activate .venv
+uvicorn sagepilot.backend.main:app --reload --port 8000
+# Output should say: "ℹ️ Embedded worker mode disabled - run worker separately"
 ```
 
-**Run the Worker** (Executes workflow tasks):
+**Terminal 3: Temporal Worker**
 ```bash
-python -m temporal_workflows.worker
+cd workflow_orchestrator
+# Activate .venv
+python -m sagepilot.backend.temporal_workflows.worker
 ```
 
-**Run the API Server** (Handles requests):
+**Terminal 4: Frontend UI**
 ```bash
-uvicorn main:app --reload --port 8000
-```
-*The API will be available at http://localhost:8000*
-
-### 3. Frontend Setup
-Navigate to the `frontend` directory:
-```bash
-cd frontend
-npm install
+cd workflow_orchestrator/sagepilot/frontend
 npm run dev
 ```
-*The UI will be available at http://localhost:5173*
+*UI available at http://localhost:5173 (connects to localhost:8000 via `.env`)*
+
+---
 
 ## 📚 API Documentation
 
@@ -121,18 +121,51 @@ When you click **Run**:
 1.  Frontend sends the workflow definition (Nodes + Edges + Config) to `/api/workflows/execute`.
 2.  Backend validates the graph (checks for cycles, disconnected nodes).
 3.  Backend starts a Temporal Workflow with a unique `run_id`.
-4.  Temporal Worker picks up the task and traverses the DAG:
-    *   Executes **Triigers** with initial payload.
-    *   Executes **Actions** (Transform, HTTP).
-    *   Evaluates **Decisions** and chooses the correct path (True/False).
-    *   Pauses at **Wait** nodes using durable timers.
+4.  Temporal Worker (either standalone or embedded) picks up the task and traverses the DAG.
 5.  Frontend polls `/api/executions/{run_id}` to show real-time status and logs.
 
-## 🎨 Design Decisions
+## 🚀 Deployment & Environment Separation
 
-*   **Temporal for Orchestration**: Chosen for its "Code-as-a-Workflow" model. It handles retries, timeouts, and long-running processes (like Wait nodes) out of the box, which is much more robust than a custom queue-based solution.
-*   **React Flow**: Selected for its ease of use in building node-based editors and customizability for the canvas interactions.
-*   **SQLite**: Chosen for simplicity in this take-home assignment, but abstracted via SQLAlchemy so it can be easily swapped for PostgreSQL in production.
+The codebase uses environment variables to switch between local and production modes seamlessly.
+
+| Variable | Local Value | Production Value | Purpose |
+| :--- | :--- | :--- | :--- |
+| `EMBEDDED_WORKER` | `false` | `true` | Controls if worker runs inside API (free-tier fix) |
+| `VITE_API_URL` | `http://localhost:8000` | `https://your-api.com` | Tells frontend where the backend is |
+| `TEMPORAL_HOST` | `localhost:7233` | `namespace.tmprl.cloud` | Temporal connection string |
+
+### Deployment Guides:
+*   [CONFIG_MODES.md](CONFIG_MODES.md) - **Detailed explanation of environment separation.**
+*   [DEPLOYMENT.md](DEPLOYMENT.md) - Step-by-step deployment instructions.
+*   [FREE_TIER_SOLUTION.md](FREE_TIER_SOLUTION.md) - Deep dive into the embedded worker pattern.
+
+**Note**: Due to Temporal's infrastructure requirements, a walkthrough video demonstration is provided as the primary demo per assignment guidelines.
+
+## 🎨 Design Decisions & Trade-offs
+
+### 1. Temporal for Orchestration
+**Decision**: Chosen over custom Python background tasks or Celery.
+*   **Rationale**: Temporal provides "Durable Execution." If the server crashes during a `Wait` node, Temporal remembers the state and resumes once the worker is back online. It handles retries and state management automatically.
+*   **Trade-off**: Increases system complexity by requiring a Temporal server/cluster, but the gain in reliability is massive for workflow engines.
+
+### 2. Topological Traversal (DAG Execution)
+**Decision**: Implemented a queue-based topological sort execution in the workflow.
+*   **Rationale**: Traditional linear execution cannot handle complex DAGs where nodes might have multiple outputs or parallel branches. Our engine ensures that each node only executes once its predecessors have completed (or been skipped by a decision).
+*   **Handling Decisions**: If a Decision Node branch is not connected, the engine treats it as a terminal no-op path rather than an error, allowing for high flexibility in workflow design.
+
+### 3. Frontend/Backend Separation
+**Decision**: Strictly decoupled architecture.
+*   **Rationale**: The frontend is a "dumb" builder that purely sends JSON definitions. All validation (cycles, connectivity) and execution logic happen on the backend. This allows for triggering the same workflows via API/Webhook without the UI.
+
+### 4. SQLite for Persistence
+**Decision**: Local file-based database.
+*   **Rationale**: Perfect for evaluation and local development. It simplified the setup process while maintaining the ability to use SQL features via SQLAlchemy.
+
+### 6. Future Improvements (What I would do with more time)
+*   **Persistent Task Queue Storage**: While SQLite is great for definitions, using a production-grade DB like PostgreSQL for Temporal's visibility would be the next step.
+*   **Enhanced Error Visualization**: Adding a "Debug" view that shows the JSON diff between node input and output on the canvas itself.
+*   **Shared State / Global Variables**: Implementing a "Global Store" node that allows passing data between non-connected branches.
+*   **User Multi-tenancy**: Adding authentication and workspace isolation to allow multiple users to manage their own workflows.
 
 ## 🤝 Contribution
 

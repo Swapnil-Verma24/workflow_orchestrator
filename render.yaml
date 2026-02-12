@@ -1,0 +1,39 @@
+# Render Blueprint - Single Service with Embedded Worker
+# This configuration runs the worker in the same process as the API server,
+# solving the free tier spin-down issue.
+
+services:
+  # Backend API Service with Embedded Worker
+  - type: web
+    name: workflow-automation-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r sagepilot/requirements.txt
+    startCommand: python -m uvicorn sagepilot.backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///./workflows.db
+      - key: TEMPORAL_HOST
+        value: <UPDATE_WITH_TEMPORAL_CLOUD_ADDRESS>  # e.g., namespace.tmprl.cloud:7233
+      - key: TEMPORAL_NAMESPACE
+        value: default
+      - key: TASK_QUEUE
+        value: workflow-execution-queue
+      - key: EMBEDDED_WORKER
+        value: true  # Run worker in same process as API
+
+# Note: If you prefer separate worker process (requires paid tier for reliability):
+# Uncomment the following and set EMBEDDED_WORKER=false above
+#
+#  - type: worker
+#    name: workflow-automation-worker
+#    env: python
+#    plan: starter
+#    buildCommand: pip install -r sagepilot/requirements.txt
+#    startCommand: python -m sagepilot.backend.temporal_workflows.worker
+#    envVars:
+#      - key: TEMPORAL_HOST
+#        value: <SAME_AS_ABOVE>
+#      - key: TASK_QUEUE
+#        value: workflow-execution-queue

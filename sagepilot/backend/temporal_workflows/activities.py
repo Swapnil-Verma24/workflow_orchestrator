@@ -28,7 +28,7 @@ async def execute_http_request(config: dict, payload: dict) -> dict:
             url = template_env.from_string(url_template).render(**payload) if payload else url_template
             body_str = template_env.from_string(body_template).render(**payload) if payload else body_template
         except Exception as te:
-            return {"error": f"Template rendering failed: {str(te)}", "status": "failed"}
+            return {"error": f"Template rendering failed: {str(te)}", "status": "failed", "error_type": "TemplateError"}
         
         try:
             headers = json.loads(headers_raw)
@@ -36,17 +36,35 @@ async def execute_http_request(config: dict, payload: dict) -> dict:
             headers = {}
 
         async with httpx.AsyncClient() as client:
-            if method == "GET":
-                response = await client.get(url, headers=headers, timeout=10.0)
-            elif method == "POST":
-                # Try to parse body as JSON if possible
-                try:
-                    data = json.loads(body_str)
-                    response = await client.post(url, json=data, headers=headers, timeout=10.0)
-                except:
-                    response = await client.post(url, content=body_str, headers=headers, timeout=10.0)
-            else:
-                return {"error": f"Unsupported method: {method}"}
+            try:
+                if method == "GET":
+                    response = await client.get(url, headers=headers, timeout=10.0)
+                elif method == "POST":
+                    # Try to parse body as JSON if possible
+                    try:
+                        data = json.loads(body_str)
+                        response = await client.post(url, json=data, headers=headers, timeout=10.0)
+                    except:
+                        response = await client.post(url, content=body_str, headers=headers, timeout=10.0)
+                else:
+                    return {"error": f"Unsupported method: {method}", "status": "failed", "error_type": "ValidationError"}
+                
+                # Check for HTTP errors (4xx, 5xx)
+                response.raise_for_status()
+
+            except httpx.TimeoutException:
+                return {"error": f"Request timed out after 10s: {url}", "status": "failed", "error_type": "Timeout"}
+            except httpx.ConnectError:
+                return {"error": f"Failed to connect to host: {url}", "status": "failed", "error_type": "ConnectionError"}
+            except httpx.HTTPStatusError as hse:
+                return {
+                    "error": f"HTTP {hse.response.status_code}: {hse.response.text[:200]}", 
+                    "status": "failed", 
+                    "status_code": hse.response.status_code,
+                    "error_type": "HTTPStatusError"
+                }
+            except Exception as e:
+                return {"error": f"Network error: {str(e)}", "status": "failed", "error_type": "NetworkError"}
             
             # Payload truncation for large responses (approx 1MB limit for serialization safety)
             MAX_RESPONSE_SIZE = 1 * 1024 * 1024 # 1MB
@@ -60,14 +78,14 @@ async def execute_http_request(config: dict, payload: dict) -> dict:
                 
                 # Check serialized size roughly
                 if len(json.dumps(resp_data)) > MAX_RESPONSE_SIZE:
-                    return {"error": "Response size exceeds 1MB limit for safety", "status_code": response.status_code}
+                    return {"error": "Response size exceeds 1MB limit for safety", "status_code": response.status_code, "error_type": "PayloadTooLarge"}
                     
                 return resp_data
             except Exception as e:
-                return {"text": response.text[:1000] if response.text else "", "status_code": response.status_code, "parse_error": str(e)}
+                return {"text": response.text[:1000] if response.text else "", "status_code": response.status_code, "parse_error": str(e), "error_type": "ParseError"}
                 
     except Exception as e:
-        return {"error": str(e), "status": "failed"}
+        return {"error": str(e), "status": "failed", "error_type": "UnknownError"}
 
 @activity.defn
 async def execute_transform_data(config: dict, payload: dict) -> dict:
@@ -87,20 +105,18 @@ async def execute_transform_data(config: dict, payload: dict) -> dict:
     try:
         if transformation_type == "multiply" and target_field in result:
             factor = parameters.get("factor", 1)
-            # Safe multiplication check
             val = result[target_field]
-            if isinstance(val, (int, float, str)):
-                try:
-                    num_val = float(val)
-                    result[target_field] = num_val * factor
-                except (ValueError, TypeError):
-                    # If it's a string that can't be float, don't crash
-                    pass
+            try:
+                num_val = float(val)
+                result[target_field] = num_val * factor
+            except (ValueError, TypeError):
+                return {"error": f"Cannot multiply non-numeric field '{target_field}' (value: {val})", "status": "failed", "error_type": "TransformationError"}
         elif transformation_type == "uppercase" and target_field in result:
             result[target_field] = str(result[target_field]).upper()
+        elif target_field not in result:
+            return {"error": f"Target field '{target_field}' not found in payload", "status": "failed", "error_type": "MissingField"}
     except Exception as e:
-        # Prevent activity from crashing the workflow
-        print(f"Transformation error: {str(e)}")
+        return {"error": f"Transformation failed: {str(e)}", "status": "failed", "error_type": "UnknownError"}
         
     return result
 @activity.defn

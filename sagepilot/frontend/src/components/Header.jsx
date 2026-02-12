@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Save, Play, Trash2, CheckCircle, Rocket, FolderOpen, Loader2 } from 'lucide-react';
+import { Save, Play, Trash2, CheckCircle, Rocket, FolderOpen, Loader2, Download, Upload } from 'lucide-react';
 import useWorkflowStore from '../store/useWorkflowStore';
 import Tooltip from './Tooltip';
 import axios from 'axios';
@@ -25,7 +25,7 @@ const Header = () => {
 
     const pollExecutionStatus = async (runId) => {
         try {
-            const response = await axios.get(`http://localhost:8000/api/executions/${runId}`);
+            const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/executions/${runId}`);
             const { status, execution_trace, result, error } = response.data;
 
             updateExecutionStatus(status, execution_trace || [], result || null);
@@ -74,13 +74,14 @@ const Header = () => {
                 })),
                 edges,
             };
-            const response = await axios.post('http://localhost:8000/api/workflows/save', {
+            const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/workflows/save`, {
                 name,
                 workflow_data: workflowData
             });
 
             // Sync current workflow identifier
             useWorkflowStore.getState().setCurrentWorkflowId(name);
+            if (response.data.webhook_id) useWorkflowStore.getState().setCurrentWebhookId(response.data.webhook_id);
 
             addToast(`Workflow "${name}" saved successfully!`, 'success');
         } catch (error) {
@@ -88,6 +89,76 @@ const Header = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleExport = async () => {
+        if (nodes.length === 0) {
+            addToast('Cannot export an empty workflow', 'error');
+            return;
+        }
+
+        try {
+            const workflowData = {
+                name: "Exported Workflow",
+                workflow_data: {
+                    nodes: nodes.map(n => ({
+                        ...n,
+                        config: nodeConfigs[n.id] || {}
+                    })),
+                    edges,
+                }
+            };
+
+            const blob = new Blob([JSON.stringify(workflowData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `workflow-${new Date().getTime()}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            addToast('Workflow exported successfully!', 'success');
+        } catch (error) {
+            addToast('Failed to export workflow', 'error');
+        }
+    };
+
+    const handleImport = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const json = JSON.parse(e.target.result);
+                setLoading(true);
+
+                // Send to backend to save and get a reference
+                const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/workflows/import`, json);
+
+                // Update local state
+                const workflow = json.workflow_data || json;
+                if (workflow.nodes) {
+                    setNodes(workflow.nodes);
+                    workflow.nodes.forEach(node => {
+                        if (node.config) updateNodeConfig(node.id, node.config);
+                    });
+                }
+                if (workflow.edges) setEdges(workflow.edges);
+
+                useWorkflowStore.getState().setCurrentWorkflowId(response.data.name);
+                addToast('Workflow imported successfully!', 'success');
+            } catch (error) {
+                addToast('Failed to import workflow. Invalid format.', 'error');
+            } finally {
+                setLoading(false);
+                // Clear the input
+                event.target.value = '';
+            }
+        };
+        reader.readAsText(file);
     };
 
     const handleDeploy = async () => {
@@ -113,10 +184,11 @@ const Header = () => {
                 }))
             };
 
-            const response = await axios.post('http://localhost:8000/api/workflows', workflowDef);
+            const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/workflows`, workflowDef);
 
             // Sync current workflow identifier (use name or ID)
             useWorkflowStore.getState().setCurrentWorkflowId(response.data.name || response.data.id);
+            if (response.data.webhook_id) useWorkflowStore.getState().setCurrentWebhookId(response.data.webhook_id);
 
             addToast(`Workflow deployed! ID: ${response.data.id}`, 'success', 4000);
         } catch (error) {
@@ -149,7 +221,7 @@ const Header = () => {
                 }))
             };
 
-            const response = await axios.post('http://localhost:8000/api/workflows/execute', workflowDef);
+            const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/workflows/execute`, workflowDef);
             const runId = response.data.run_id;
 
             setActiveExecution(runId);
@@ -171,11 +243,12 @@ const Header = () => {
 
         setLoading(true);
         try {
-            const response = await axios.get(`http://localhost:8000/api/workflows/saved/${name}`);
+            const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/workflows/saved/${name}`);
             const data = response.data;
             if (data.workflow_data) {
                 // Sync current workflow identifier
                 useWorkflowStore.getState().setCurrentWorkflowId(data.name || name);
+                if (data.webhook_id) useWorkflowStore.getState().setCurrentWebhookId(data.webhook_id);
 
                 let workflow;
                 try {
@@ -255,6 +328,25 @@ const Header = () => {
                             <FolderOpen size={16} />
                             Load
                         </button>
+                    </Tooltip>
+
+                    <Tooltip content="Export workflow as JSON">
+                        <button
+                            onClick={handleExport}
+                            disabled={isLoading || nodes.length === 0}
+                            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <Download size={16} />
+                            Export
+                        </button>
+                    </Tooltip>
+
+                    <Tooltip content="Import workflow from JSON">
+                        <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-all shadow-sm cursor-pointer hover:bg-slate-50 disabled:opacity-50">
+                            <Upload size={16} />
+                            Import
+                            <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+                        </label>
                     </Tooltip>
 
                     <div className="w-px h-6 bg-slate-200 mx-2" />

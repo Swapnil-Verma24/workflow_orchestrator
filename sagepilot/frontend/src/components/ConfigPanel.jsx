@@ -12,7 +12,8 @@ const ConfigPanel = () => {
         setSelectedNode,
         activeExecution,
         addToast,
-        currentWorkflowId
+        currentWorkflowId,
+        currentWebhookId
     } = useWorkflowStore();
 
     const [config, setConfig] = useState({});
@@ -51,13 +52,13 @@ const ConfigPanel = () => {
 
         switch (nodeType) {
             case 'webhook_trigger':
-                const identifier = currentWorkflowId || "{save_or_deploy_to_get_id}";
-                const webhookUrl = `http://localhost:8000/api/webhooks/${identifier}`;
+                const identifier = currentWebhookId || "{save_or_deploy_to_get_uuid}";
+                const webhookUrl = `${import.meta.env.VITE_API_URL}/api/webhooks/${identifier}`;
                 return (
                     <div className="space-y-4">
-                        <div className={`p-4 rounded-2xl border ${currentWorkflowId ? 'bg-indigo-50 border-indigo-100' : 'bg-amber-50 border-amber-100'}`}>
-                            <label className={`block text-[10px] font-bold uppercase tracking-widest mb-2 ${currentWorkflowId ? 'text-indigo-400' : 'text-amber-500'}`}>
-                                {currentWorkflowId ? 'Your Webhook URL' : 'URL NOT READY'}
+                        <div className={`p-4 rounded-2xl border ${currentWebhookId ? 'bg-indigo-50 border-indigo-100' : 'bg-amber-50 border-amber-100'}`}>
+                            <label className={`block text-[10px] font-bold uppercase tracking-widest mb-2 ${currentWebhookId ? 'text-indigo-400' : 'text-amber-500'}`}>
+                                {currentWebhookId ? 'Your Unique Webhook URL' : 'URL NOT READY'}
                             </label>
                             <div className="flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
                                 <code className={`flex-1 text-[11px] font-mono truncate ${currentWorkflowId ? 'text-slate-600' : 'text-slate-400 italic'}`}>
@@ -76,9 +77,9 @@ const ConfigPanel = () => {
                                     </button>
                                 )}
                             </div>
-                            {!currentWorkflowId && (
+                            {!currentWebhookId && (
                                 <p className="text-[10px] text-amber-600 mt-2 font-medium">
-                                    ⚠️ Please save or deploy your workflow first to generate a permanent URL.
+                                    ⚠️ Please save or deploy your workflow first to generate a permanent private URL.
                                 </p>
                             )}
                         </div>

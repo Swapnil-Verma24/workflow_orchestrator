@@ -8,6 +8,7 @@ const useWorkflowStore = create((set, get) => ({
     selectedNode: null,
     nodeCounts: {},
     currentWorkflowId: null,
+    currentWebhookId: null,
     activeExecution: {
         runId: null,
         status: 'idle',
@@ -142,7 +143,8 @@ const useWorkflowStore = create((set, get) => ({
 
     setSelectedNode: (node) => set({ selectedNode: node }),
     setCurrentWorkflowId: (id) => set({ currentWorkflowId: id }),
-    clearCanvas: () => set({ nodes: [], edges: [], nodeConfigs: {}, selectedNode: null }),
+    setCurrentWebhookId: (id) => set({ currentWebhookId: id }),
+    clearCanvas: () => set({ nodes: [], edges: [], nodeConfigs: {}, selectedNode: null, currentWorkflowId: null, currentWebhookId: null }),
 
     // Toast notifications
     addToast: (message, type = 'info', duration = 3000) => {

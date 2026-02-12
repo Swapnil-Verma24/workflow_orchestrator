@@ -35,9 +35,11 @@ yarn-error.log*
 backend/workflows.db
 *.sqlite
 *.db
+*.db-journal
 
 # Environment and Secrets
 .env
+.env.production
 .env.local
 .env.*.local
 .flaskenv
@@ -56,7 +58,7 @@ secrets.json
 Thumbs.db
 Desktop.ini
 
-# Scratchpad / Test Scripts
+# Scratchpad / Test Scripts / Logs
 sagepilot/test.py
 sagepilot/visualize.py
 sagepilot/visualize_payload_flow.py
@@ -64,3 +66,8 @@ sagepilot/test_decision_node.py
 sagepilot/test_hardening.py
 sagepilot/comprehensive_test.py
 sagepilot/frontend-simple/
+test_advanced_features.py
+test_out*.txt
+test_workflows_tmp.db
+debug.log
+error.log

@@ -101,14 +101,20 @@ def validate_workflow_structure(workflow_def: Dict) -> Tuple[bool, Optional[str]
     if has_cycle:
         return False, error_msg
 
-    # 4. Check for Decision node connectivity (must have both branches)
+    # 4. Check for Decision node connectivity (allow one or both branches)
     decision_nodes = [n for n in nodes if n.get('type') == 'decision_node']
     for dn in decision_nodes:
         dn_id = dn['id']
         true_branch = any(e for e in edges if e['source'] == dn_id and e.get('sourceHandle') == 'true')
         false_branch = any(e for e in edges if e['source'] == dn_id and e.get('sourceHandle') == 'false')
+        
+        if not true_branch and not false_branch:
+            return False, f"Decision node '{dn_id}' must have at least one branch (True or False) connected."
+        
         if not true_branch or not false_branch:
-            return False, f"Decision node '{dn_id}' must have both 'true' and 'false' branches connected."
+            missing = "True" if not true_branch else "False"
+            # We don't return False here, but we log/note that it will be a terminal path
+            print(f"INFO: Decision node '{dn_id}' is missing the '{missing}' branch. It will be treated as a terminal path.")
 
     # 5. Check for disconnected nodes (Reachability from any trigger)
     trigger_nodes = [n['id'] for n in nodes if n.get('type') in ['manual_trigger', 'webhook_trigger']]

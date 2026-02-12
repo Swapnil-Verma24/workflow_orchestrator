@@ -8,9 +8,9 @@ import asyncio
 import json
 
 # Import database components
-from database import init_db, get_db
-from models import SavedWorkflow
-from utils import check_cycle_and_get_order, validate_workflow_structure
+from sagepilot.backend.database import init_db, get_db
+from sagepilot.backend.models import SavedWorkflow
+from sagepilot.backend.utils import check_cycle_and_get_order, validate_workflow_structure
 
 app = FastAPI(title="SagePilot Workflow Engine")
 
@@ -19,6 +19,14 @@ app = FastAPI(title="SagePilot Workflow Engine")
 async def startup_event():
     init_db()
     print("✅ Database initialized")
+    
+    # Start embedded worker if enabled (for production deployment)
+    from sagepilot.backend.embedded_worker import is_embedded_mode, start_worker_background
+    if is_embedded_mode():
+        print("🔧 Embedded worker mode enabled - starting worker in background...")
+        await start_worker_background()
+    else:
+        print("ℹ️  Embedded worker mode disabled - run worker separately")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,19 +39,13 @@ app.add_middleware(
 # Store to track executions (in-memory is fine for logs/status in this assignment)
 executions = {}
 
-@app.post("/api/webhooks/{workflow_id}", status_code=202)
-async def webhook_trigger(workflow_id: str, request: Request, db: Session = Depends(get_db)):
-    """Trigger a workflow via webhook using database lookup"""
-    # Try to find by ID (if it's a number) or Name
-    workflow = None
-    if workflow_id.isdigit():
-        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.id == int(workflow_id)).first()
-    
-    if not workflow:
-        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_id).first()
+@app.post("/api/webhooks/{webhook_id}", status_code=202)
+async def webhook_trigger(webhook_id: str, request: Request, db: Session = Depends(get_db)):
+    """Trigger a workflow via webhook using unique webhook_id lookup"""
+    workflow = db.query(SavedWorkflow).filter(SavedWorkflow.webhook_id == webhook_id).first()
         
     if not workflow:
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Workflow with webhook ID '{webhook_id}' not found")
     
     workflow_def = json.loads(workflow.workflow_data)
     
@@ -90,47 +92,75 @@ async def deploy_workflow(workflow_def: dict, db: Session = Depends(get_db)):
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
     
-    # Use provided ID or generate a name if not present
     name = workflow_def.get("name") or f"Deployed-{str(uuid.uuid4())[:8]}"
+    
+    # Check if workflow with this name already exists
+    existing = db.query(SavedWorkflow).filter(SavedWorkflow.name == name).first()
+    if existing:
+        existing.workflow_data = json.dumps(workflow_def)
+        # We REUSE the webhook_id to keep URLs stable on redeploy
+        db.commit()
+        db.refresh(existing)
+        return {
+            "id": existing.id, 
+            "webhook_id": existing.webhook_id,
+            "name": existing.name, 
+            "message": "Workflow updated successfully"
+        }
+    
+    webhook_id = str(uuid.uuid4())
     
     # Save to database
     new_workflow = SavedWorkflow(
         name=name,
+        webhook_id=webhook_id,
         workflow_data=json.dumps(workflow_def)
     )
     db.add(new_workflow)
     db.commit()
     db.refresh(new_workflow)
     
-    return {"id": new_workflow.id, "name": new_workflow.name, "message": "Workflow deployed successfully"}
+    return {
+        "id": new_workflow.id, 
+        "webhook_id": new_workflow.webhook_id,
+        "name": new_workflow.name, 
+        "message": "Workflow deployed successfully"
+    }
 
 @app.get("/")
 async def root():
-    return {"message": "SagePilot Workflow Engine", "status": "running"}
+    return {"message": "SagePilot Workflow Engine API"}
 
 @app.get("/api/workflows/{workflow_id}/export")
 async def export_workflow(workflow_id: str, db: Session = Depends(get_db)):
     """Export workflow as a portable JSON document"""
-    workflow = None
-    if workflow_id.isdigit():
-        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.id == int(workflow_id)).first()
+    workflow = db.query(SavedWorkflow).filter(
+        (SavedWorkflow.id == int(workflow_id)) if workflow_id.isdigit() else (SavedWorkflow.name == workflow_id)
+    ).first()
     
-    if not workflow:
-        workflow = db.query(SavedWorkflow).filter(SavedWorkflow.name == workflow_id).first()
-        
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    
-    return json.loads(workflow.workflow_data)
+        
+    return {
+        "name": workflow.name,
+        "webhook_id": workflow.webhook_id,
+        "workflow_data": json.loads(workflow.workflow_data),
+        "metadata": {
+            "exported_at": str(func.now()),
+            "engine": "SagePilot"
+        }
+    }
 
 @app.post("/api/workflows/import")
 async def import_workflow(workflow_data: dict, db: Session = Depends(get_db)):
     """Import a previously exported JSON and reconstruct the workflow"""
     name = workflow_data.get("name") or f"Imported-{str(uuid.uuid4())[:8]}"
+    webhook_id = str(uuid.uuid4())
     
     # Save to database
     new_workflow = SavedWorkflow(
         name=name,
+        webhook_id=webhook_id,
         workflow_data=json.dumps(workflow_data)
     )
     db.add(new_workflow)

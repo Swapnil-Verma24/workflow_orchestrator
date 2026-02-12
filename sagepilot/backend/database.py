@@ -2,8 +2,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
+import os
 # SQLite database URL
-SQLALCHEMY_DATABASE_URL = "sqlite:///./workflows.db"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./workflows.db")
 
 # Create engine
 engine = create_engine(
@@ -19,7 +20,7 @@ Base = declarative_base()
 # Initialize database
 def init_db():
     """Create all tables in the database"""
-    import models  # Import here to avoid circular imports
+    import sagepilot.backend.models  # Import here to avoid circular imports
     Base.metadata.create_all(bind=engine)
 
 # Dependency to get DB session
